@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "البوفية",
+    "slug": "buffet-app",
+    "version": "1.0.0",
+    "platforms": ["ios", "android"],
+    "android": {
+      "package": "com.buffet.app"
+    }
+  }
+}
