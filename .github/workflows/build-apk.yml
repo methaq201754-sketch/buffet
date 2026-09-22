@@ -25,9 +25,10 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Install EAS CLI & Prebuild
+      - name: Install EAS CLI & Clean Prebuild
         run: |
           npm install -g eas-cli
+          rm -rf android
           npx expo prebuild --platform android --clean
 
       - name: Build Android Release APK
