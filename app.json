@@ -3,9 +3,17 @@
     "name": "البوفية",
     "slug": "buffet-app",
     "version": "1.0.0",
-    "platforms": ["ios", "android"],
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
     "android": {
-      "package": "com.buffet.app"
+      "package": "com.buffet.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      }
     }
   }
 }
