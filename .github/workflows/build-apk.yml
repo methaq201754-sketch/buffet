@@ -25,18 +25,16 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Build APK with Prebuild
+      - name: Install EAS CLI & Prebuild
         run: |
-          npx expo prebuild --platform android
+          npm install -g eas-cli
+          npx expo prebuild --platform android --clean
+
+      - name: Build Android Release APK
+        run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleRelease
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: buffet-app-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          ./gradlew assembleRelease --no-daemon
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
