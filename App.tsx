@@ -10,795 +10,737 @@ import {
   Alert,
   SafeAreaView,
   StatusBar,
-  Platform,
+  Image,
+  Modal,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// --- الأنواع والبيانات (Types & Interfaces) ---
+// --- الأنواع والبيانات (Types) ---
 type Role = 'Admin' | 'Employee';
-type OrderStatus = 'قيد الانتظار' | 'مكتمل' | 'ملغي';
+type Category = 'وجبة الفطور' | 'وجبة الغداء' | 'وجبات أخرى';
+type OrderStatus = 'قيد الانتظار' | 'تمت الموافقة' | 'مرفوض';
 
 interface User {
   id: string;
   name: string;
-  pin: string;
+  password: string;
   role: Role;
+  allowedBalance: number; // الرصيد المسموح
+  usedBalance: number;    // رصيد السحب
+}
+
+interface Meal {
+  id: string;
+  name: string;
+  category: Category;
+  price: number; // بالريال اليمني
 }
 
 interface Order {
   id: string;
   employeeName: string;
   mealName: string;
-  details: string;
-  price: number;
+  category: Category;
+  quantity: number;
+  totalPrice: number;
   dateTime: string;
   status: OrderStatus;
 }
 
-interface MealOption {
-  id: string;
-  name: string;
-  price: number;
-}
+// شعار YCPD المرفق (يمكن استبداله برابط مباشر أو محلي)
+const LOGO_URL = 'https://i.ibb.co/L8v8Cvh/ycpd-logo.png'; 
 
-// البيانات الافتراضية
+// البيانات الافتراضية الأولية
 const INITIAL_USERS: User[] = [
-  { id: '1', name: 'ميثاق', pin: '1111', role: 'Admin' },
-  { id: '2', name: 'بدر', pin: '2222', role: 'Employee' },
-  { id: '3', name: 'سعيد', pin: '3333', role: 'Employee' },
+  { id: '1', name: 'ميثاق عبده علي مقبل', password: '111', role: 'Admin', allowedBalance: 100000, usedBalance: 0 },
+  { id: '2', name: 'بدر', password: '222', role: 'Employee', allowedBalance: 30000, usedBalance: 0 },
+  { id: '3', name: 'سعيد', password: '333', role: 'Employee', allowedBalance: 25000, usedBalance: 0 },
 ];
 
-const MEAL_OPTIONS: MealOption[] = [
-  { id: 'm1', name: 'وجبة إفطار مشكل', price: 15 },
-  { id: 'm2', name: 'سندويش كبدة', price: 12 },
-  { id: 'm3', name: 'سندويش فلافل', price: 8 },
-  { id: 'm4', name: 'وجبة غداء سفري', price: 25 },
-  { id: 'm5', name: 'عصير طازج', price: 7 },
-  { id: 'm6', name: 'شاي / قهوة', price: 3 },
+const INITIAL_MEALS: Meal[] = [
+  { id: 'm1', name: 'وجبة كبدة بالفرن', category: 'وجبة الفطور', price: 2500 },
+  { id: 'm2', name: 'صحن فلافل مشكل', category: 'وجبة الفطور', price: 1500 },
+  { id: 'm3', name: 'وجبة دجاج مضغوط', category: 'وجبة الغداء', price: 4500 },
+  { id: 'm4', name: 'وجبة لحم برم', category: 'وجبة الغداء', price: 6000 },
+  { id: 'm5', name: 'عصير طازج مشكل', category: 'وجبات أخرى', price: 1200 },
+  { id: 'm6', name: 'شاي حليب / قهوة', category: 'وجبات أخرى', price: 500 },
 ];
 
-export default App;
-
-function App() {
+export default function App() {
   const [users, setUsers] = useState<User[]>([]);
+  const [meals, setMeals] = useState<Meal[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
-  // حالات تسجيل الدخول
+  // تسجيل الدخول
   const [inputName, setInputName] = useState('');
-  const [inputPin, setInputPin] = useState('');
+  const [inputPassword, setInputPassword] = useState('');
 
-  // شاشات الموظف (Tabs)
-  const [employeeTab, setEmployeeTab] = useState<'order' | 'history'>('order');
+  // واجهات الموظف
+  const [currentScreen, setCurrentScreen] = useState<'main' | 'order_categories' | 'order_form' | 'reports'>('main');
+  const [selectedCategory, setSelectedCategory] = useState<Category>('وجبة الفطور');
+  const [selectedMealId, setSelectedMealId] = useState<string>('');
+  const [quantity, setQuantity] = useState<string>('1');
 
-  // حالات نموذج الطلب
-  const [selectedMeal, setSelectedMeal] = useState<MealOption>(MEAL_OPTIONS[0]);
-  const [mealDetails, setMealDetails] = useState('');
+  // تحكم المدير
+  const [adminTab, setAdminTab] = useState<'orders' | 'meals' | 'employees'>('orders');
+  
+  // إضافة/تعديل الوجبات
+  const [newMealName, setNewMealName] = useState('');
+  const [newMealCategory, setNewMealCategory] = useState<Category>('وجبة الفطور');
+  const [newMealPrice, setNewMealPrice] = useState('');
+  const [editingMealId, setEditingMealId] = useState<string | null>(null);
 
-  // حالات إدارة الموظفين (للإدارة)
+  // إضافة/تعديل الموظفين
   const [newEmpName, setNewEmpName] = useState('');
-  const [newEmpPin, setNewEmpPin] = useState('');
-  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [newEmpPassword, setNewEmpPassword] = useState('');
+  const [newEmpBalance, setNewEmpBalance] = useState('');
+  const [newEmpRole, setNewEmpRole] = useState<Role>('Employee');
 
-  // تحميل البيانات وإعداد العنوان عند بدء التطبيق
   useEffect(() => {
-    if (Platform.OS === 'web') {
-      document.title = 'البوفية';
-    }
     loadData();
   }, []);
 
   const loadData = async () => {
     try {
-      const storedUsers = await AsyncStorage.getItem('@buffet_users');
-      if (storedUsers) {
-        setUsers(JSON.parse(storedUsers));
-      } else {
-        await AsyncStorage.setItem('@buffet_users', JSON.stringify(INITIAL_USERS));
-        setUsers(INITIAL_USERS);
-      }
+      const u = await AsyncStorage.getItem('@ycpd_users');
+      const m = await AsyncStorage.getItem('@ycpd_meals');
+      const o = await AsyncStorage.getItem('@ycpd_orders');
 
-      const storedOrders = await AsyncStorage.getItem('@buffet_orders');
-      if (storedOrders) {
-        setOrders(JSON.parse(storedOrders));
-      }
-    } catch (error) {
-      console.error('خطأ في تحميل البيانات:', error);
+      setUsers(u ? JSON.parse(u) : INITIAL_USERS);
+      setMeals(m ? JSON.parse(m) : INITIAL_MEALS);
+      setOrders(o ? JSON.parse(o) : []);
+    } catch (e) {
+      console.error(e);
     }
   };
 
-  const saveUsers = async (newUsers: User[]) => {
-    setUsers(newUsers);
-    await AsyncStorage.setItem('@buffet_users', JSON.stringify(newUsers));
+  const saveData = async (updatedUsers?: User[], updatedMeals?: Meal[], updatedOrders?: Order[]) => {
+    if (updatedUsers) {
+      setUsers(updatedUsers);
+      await AsyncStorage.setItem('@ycpd_users', JSON.stringify(updatedUsers));
+    }
+    if (updatedMeals) {
+      setMeals(updatedMeals);
+      await AsyncStorage.setItem('@ycpd_meals', JSON.stringify(updatedMeals));
+    }
+    if (updatedOrders) {
+      setOrders(updatedOrders);
+      await AsyncStorage.setItem('@ycpd_orders', JSON.stringify(updatedOrders));
+    }
   };
 
-  const saveOrders = async (newOrders: Order[]) => {
-    setOrders(newOrders);
-    await AsyncStorage.setItem('@buffet_orders', JSON.stringify(newOrders));
+  // التحية حسب الوقت
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    return hour < 12 ? 'صباح الخير' : 'مساء الخير';
   };
 
-  // --- 1. تسجيل الدخول ---
+  // 1. تسجيل الدخول
   const handleLogin = () => {
-    const foundUser = users.find(
-      (u) => u.name.trim() === inputName.trim() && u.pin.trim() === inputPin.trim()
+    const found = users.find(
+      (u) => u.name.trim() === inputName.trim()
     );
 
-    if (foundUser) {
-      setCurrentUser(foundUser);
-      setInputName('');
-      setInputPin('');
-    } else {
-      Alert.alert('خطأ', 'اسم المستخدم أو رمز PIN غير صحيح');
+    if (!found) {
+      Alert.alert('خطأ', 'اسم المستخدم غير موجود');
+      return;
     }
+
+    if (found.password !== inputPassword.trim()) {
+      Alert.alert('خطأ', 'كلمة المرور غير صحيحة');
+      return;
+    }
+
+    setCurrentUser(found);
+    setInputName('');
+    setInputPassword('');
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
-    setEmployeeTab('order');
+    setCurrentScreen('main');
   };
 
-  // --- 2. تقديم طلب جديد ---
-  const handleSubmitOrder = () => {
+  // 2. إرسال الطلب
+  const handleSendOrder = () => {
     if (!currentUser) return;
+    const meal = meals.find((m) => m.id === selectedMealId);
+    if (!meal) {
+      Alert.alert('تنبيه', 'يرجى اختيار الوجبة أولاً');
+      return;
+    }
+
+    const qty = parseInt(quantity) || 1;
+    const totalPrice = meal.price * qty;
+
+    const remaining = currentUser.allowedBalance - currentUser.usedBalance;
+    if (totalPrice > remaining) {
+      Alert.alert('رصيد غير كافي', 'عذراً، المبلغ المطلوب يتجاوز الرصيد المتبقي المسموح لك.');
+      return;
+    }
 
     const newOrder: Order = {
       id: Date.now().toString(),
       employeeName: currentUser.name,
-      mealName: selectedMeal.name,
-      details: mealDetails.trim() || 'بدون ملاحظات',
-      price: selectedMeal.price,
-      dateTime: new Date().toLocaleString('ar-EG'),
+      mealName: meal.name,
+      category: selectedCategory,
+      quantity: qty,
+      totalPrice: totalPrice,
+      dateTime: new Date().toLocaleString('ar-YE'),
       status: 'قيد الانتظار',
     };
 
     const updatedOrders = [newOrder, ...orders];
-    saveOrders(updatedOrders);
-    setMealDetails('');
-    Alert.alert('تم بنجاح', 'تم إرسال طلبك إلى البوفية بنجاح!');
+    
+    // تحديث رصيد السحب للموظف
+    const updatedUsers = users.map((u) =>
+      u.id === currentUser.id ? { ...u, usedBalance: u.usedBalance + totalPrice } : u
+    );
+
+    setCurrentUser({ ...currentUser, usedBalance: currentUser.usedBalance + totalPrice });
+    saveData(updatedUsers, undefined, updatedOrders);
+
+    Alert.alert('تم بنجاح', 'تم ارسال الطلب بنجاح وهو قيد الموافقة.');
+    setCurrentScreen('main');
   };
 
-  // --- 3. إدارة الطلبات (للأدمن) ---
-  const updateOrderStatus = (orderId: string, status: OrderStatus) => {
+  // 3. تحكم المدير في الطلبات
+  const handleOrderStatus = (orderId: string, status: OrderStatus) => {
     const updated = orders.map((o) => (o.id === orderId ? { ...o, status } : o));
-    saveOrders(updated);
+    saveData(undefined, undefined, updated);
   };
 
-  // --- 4. إدارة الموظفين (للأدمن) ---
-  const handleAddOrUpdateEmployee = () => {
-    if (!newEmpName.trim() || !newEmpPin.trim()) {
-      Alert.alert('تنبيه', 'يرجى إدخال اسم الموظف ورمز PIN');
+  // 4. تحكم المدير في الوجبات
+  const handleSaveMeal = () => {
+    if (!newMealName.trim() || !newMealPrice.trim()) {
+      Alert.alert('خطأ', 'يرجى كتابة اسم الوجبة والسعر');
       return;
     }
 
-    if (editingUserId) {
-      const updated = users.map((u) =>
-        u.id === editingUserId ? { ...u, name: newEmpName.trim(), pin: newEmpPin.trim() } : u
+    if (editingMealId) {
+      const updated = meals.map((m) =>
+        m.id === editingMealId
+          ? { ...m, name: newMealName, category: newMealCategory, price: parseFloat(newMealPrice) }
+          : m
       );
-      saveUsers(updated);
-      setEditingUserId(null);
-      Alert.alert('تم', 'تم تحديث بيانات الموظف بنجاح');
+      saveData(undefined, updated, undefined);
+      setEditingMealId(null);
     } else {
-      const newUser: User = {
+      const newMeal: Meal = {
         id: Date.now().toString(),
-        name: newEmpName.trim(),
-        pin: newEmpPin.trim(),
-        role: 'Employee',
+        name: newMealName,
+        category: newMealCategory,
+        price: parseFloat(newMealPrice),
       };
-      saveUsers([...users, newUser]);
-      Alert.alert('تم', 'تم إضافة الموظف بنجاح');
+      saveData(undefined, [...meals, newMeal], undefined);
     }
 
+    setNewMealName('');
+    setNewMealPrice('');
+  };
+
+  // 5. تحكم المدير في الموظفين والرصيد
+  const handleSaveEmployee = () => {
+    if (!newEmpName.trim() || !newEmpPassword.trim()) {
+      Alert.alert('خطأ', 'يرجى كتابة اسم الموظف وكلمة المرور');
+      return;
+    }
+
+    const newUser: User = {
+      id: Date.now().toString(),
+      name: newEmpName.trim(),
+      password: newEmpPassword.trim(),
+      role: newEmpRole,
+      allowedBalance: parseFloat(newEmpBalance) || 0,
+      usedBalance: 0,
+    };
+
+    saveData([...users, newUser], undefined, undefined);
     setNewEmpName('');
-    setNewEmpPin('');
+    setNewEmpPassword('');
+    setNewEmpBalance('');
+    Alert.alert('تم', 'تم إضافة الموظف وتحديد رصيده بنجاح');
   };
 
-  const handleEditUser = (user: User) => {
-    setEditingUserId(user.id);
-    setNewEmpName(user.name);
-    setNewEmpPin(user.pin);
+  const handleDeleteUser = (id: string) => {
+    const updated = users.filter((u) => u.id !== id);
+    saveData(updated, undefined, undefined);
   };
 
-  const handleDeleteUser = (userId: string) => {
-    Alert.alert('تأكيد الحذف', 'هل أنت تأكد من حذف هذا الموظف؟', [
-      { text: 'إلغاء', style: 'cancel' },
-      {
-        text: 'حذف',
-        style: 'destructive',
-        onPress: () => {
-          const updated = users.filter((u) => u.id !== userId);
-          saveUsers(updated);
-        },
-      },
-    ]);
-  };
+  // --- الواجهات ---
 
-  // --- الشاشات الواجهات (Views) ---
-
-  // شاشة تسجيل الدخول
+  // شاشة الدخول
   if (!currentUser) {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar barStyle="dark-content" />
-        <View style={styles.authContainer}>
-          <Text style={styles.appHeaderTitle}>البوفية</Text>
-          <Text style={styles.subTitle}>تسجيل الدخول للنظام</Text>
+        <View style={styles.authBox}>
+          {/* شعار التطبيق YCPD */}
+          <View style={styles.logoContainer}>
+            <View style={styles.logoCircle}>
+              <Text style={styles.logoText}>YCPD</Text>
+              <View style={styles.logoSmile} />
+            </View>
+          </View>
 
-          <View style={styles.formGroup}>
-            <Text style={styles.label}>اسم الموظف / المسؤول:</Text>
+          <Text style={styles.appTitle}>تطبيق البوفية</Text>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>أسم الموظف:</Text>
             <TextInput
               style={styles.input}
-              placeholder="مثال: ميثاق أو بدر"
+              placeholder="ادخل الاسم هنا"
               value={inputName}
               onChangeText={setInputName}
             />
           </View>
 
-          <View style={styles.formGroup}>
-            <Text style={styles.label}>رمز PIN:</Text>
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>كلمة المرور:</Text>
             <TextInput
               style={styles.input}
               placeholder="****"
-              keyboardType="numeric"
               secureTextEntry
-              value={inputPin}
-              onChangeText={setInputPin}
+              value={inputPassword}
+              onChangeText={setInputPassword}
             />
           </View>
 
-          <TouchableOpacity style={styles.primaryButton} onPress={handleLogin}>
-            <Text style={styles.primaryButtonText}>تسجيل الدخول</Text>
+          <TouchableOpacity style={styles.btnPrimary} onPress={handleLogin}>
+            <Text style={styles.btnText}>تسجيل الدخول</Text>
           </TouchableOpacity>
-
-          <View style={styles.hintBox}>
-            <Text style={styles.hintTitle}>حسابات للتجربة:</Text>
-            <Text style={styles.hintText}>• ميثاق (مدير) - PIN: 1111</Text>
-            <Text style={styles.hintText}>• بدر (موظف) - PIN: 2222</Text>
-            <Text style={styles.hintText}>• سعيد (موظف) - PIN: 3333</Text>
-          </View>
         </View>
       </SafeAreaView>
     );
   }
 
-  // لوحة تحكم المدير (ميثاق)
+  // لوحة تحكم المدير (ميثاق عبده علي مقبل)
   if (currentUser.role === 'Admin') {
-    const totalOrdersToday = orders.length;
-    const totalSalesAmount = orders.reduce((sum, o) => sum + o.price, 0);
-
     return (
       <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="dark-content" />
-        <View style={styles.headerBar}>
-          <Text style={styles.headerTitle}>لوحة التحكم - البوفية</Text>
+        <View style={styles.header}>
+          <Text style={styles.headerText}>
+            {getGreeting()} يا {currentUser.name}
+          </Text>
           <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
             <Text style={styles.logoutText}>خروج</Text>
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.content}>
-          {/* ملخص المبيعات والطلبات */}
-          <View style={styles.statsContainer}>
-            <View style={styles.statCard}>
-              <Text style={styles.statNumber}>{totalOrdersToday}</Text>
-              <Text style={styles.statLabel}>إجمالي الطلبات</Text>
-            </View>
-            <View style={[styles.statCard, { backgroundColor: '#e8f5e9' }]}>
-              <Text style={[styles.statNumber, { color: '#2e7d32' }]}>{totalSalesAmount} ر.س</Text>
-              <Text style={styles.statLabel}>إجمالي المبيعات</Text>
-            </View>
-          </View>
+        {/* أزرار لوحة التحكم الرئيسية */}
+        <View style={styles.tabRow}>
+          <TouchableOpacity
+            style={[styles.tabBtn, adminTab === 'orders' && styles.activeTab]}
+            onPress={() => setAdminTab('orders')}
+          >
+            <Text style={styles.tabBtnText}>لوحة الطلبات</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tabBtn, adminTab === 'meals' && styles.activeTab]}
+            onPress={() => setAdminTab('meals')}
+          >
+            <Text style={styles.tabBtnText}>إدارة الوجبات والأسعار</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tabBtn, adminTab === 'employees' && styles.activeTab]}
+            onPress={() => setAdminTab('employees')}
+          >
+            <Text style={styles.tabBtnText}>الموظفين والصلاحيات</Text>
+          </TouchableOpacity>
+        </View>
 
-          {/* إدارة الطلبات الحية */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>متابعة طلبات الموظفين</Text>
-            {orders.length === 0 ? (
-              <Text style={styles.emptyText}>لا توجد طلبات مسجلة حتى الآن.</Text>
-            ) : (
-              orders.map((item) => (
-                <View key={item.id} style={styles.orderCardAdmin}>
-                  <View style={styles.orderHeaderAdmin}>
-                    <Text style={styles.empName}>{item.employeeName}</Text>
-                    <Text style={styles.orderTime}>{item.dateTime}</Text>
-                  </View>
-                  <Text style={styles.orderDetails}>الطلب: {item.mealName}</Text>
-                  <Text style={styles.orderDetails}>الملاحظات: {item.details}</Text>
-                  <Text style={styles.orderPrice}>السعر: {item.price} ر.س</Text>
-
-                  <View style={styles.statusRow}>
-                    <Text style={styles.label}>الحالة: </Text>
-                    <Text style={getStatusStyle(item.status)}>{item.status}</Text>
-                  </View>
-
-                  <View style={styles.actionButtonsRow}>
-                    <TouchableOpacity
-                      style={[styles.smallBtn, { backgroundColor: '#ffa000' }]}
-                      onPress={() => updateOrderStatus(item.id, 'قيد الانتظار')}
-                    >
-                      <Text style={styles.btnText}>انتظار</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.smallBtn, { backgroundColor: '#388e3c' }]}
-                      onPress={() => updateOrderStatus(item.id, 'مكتمل')}
-                    >
-                      <Text style={styles.btnText}>إكمال</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.smallBtn, { backgroundColor: '#d32f2f' }]}
-                      onPress={() => updateOrderStatus(item.id, 'ملغي')}
-                    >
-                      <Text style={styles.btnText}>إلغاء</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ))
-            )}
-          </View>
-
-          {/* إدارة الموظفين */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>إدارة الموظفين</Text>
-            <View style={styles.addEmpForm}>
-              <TextInput
-                style={styles.inputSmall}
-                placeholder="اسم الموظف"
-                value={newEmpName}
-                onChangeText={setNewEmpName}
-              />
-              <TextInput
-                style={styles.inputSmall}
-                placeholder="رمز PIN"
-                keyboardType="numeric"
-                value={newEmpPin}
-                onChangeText={setNewEmpPin}
-              />
-              <TouchableOpacity style={styles.addEmpBtn} onPress={handleAddOrUpdateEmployee}>
-                <Text style={styles.primaryButtonText}>
-                  {editingUserId ? 'تحديث' : 'إضافة موظف'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {users
-              .filter((u) => u.role !== 'Admin')
-              .map((emp) => (
-                <View key={emp.id} style={styles.empRow}>
-                  <Text style={styles.empRowText}>
-                    {emp.name} (PIN: {emp.pin})
+        <ScrollView style={styles.body}>
+          {adminTab === 'orders' && (
+            <View>
+              <Text style={styles.sectionTitle}>جميع الطلبات الواردة</Text>
+              {orders.map((o) => (
+                <View key={o.id} style={styles.card}>
+                  <Text style={styles.cardTitle}>{o.employeeName}</Text>
+                  <Text style={styles.cardSub}>
+                    {o.category} - {o.mealName} (العدد: {o.quantity})
                   </Text>
-                  <View style={{ flexDirection: 'row' }}>
-                    <TouchableOpacity onPress={() => handleEditUser(emp)} style={styles.editBtn}>
-                      <Text style={{ color: '#1976d2' }}>تعديل</Text>
+                  <Text style={styles.priceText}>
+                    المبلغ: {o.totalPrice.toLocaleString()} ريال يمني
+                  </Text>
+                  <Text style={styles.timeText}>{o.dateTime}</Text>
+                  <Text style={styles.statusText}>الحالة الحالية: {o.status}</Text>
+
+                  <View style={styles.actionRow}>
+                    <TouchableOpacity
+                      style={[styles.smallBtn, { backgroundColor: '#2e7d32' }]}
+                      onPress={() => handleOrderStatus(o.id, 'تمت الموافقة')}
+                    >
+                      <Text style={styles.btnText}>موافقة</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => handleDeleteUser(emp.id)} style={styles.deleteBtn}>
-                      <Text style={{ color: '#d32f2f' }}>حذف</Text>
+                    <TouchableOpacity
+                      style={[styles.smallBtn, { backgroundColor: '#c62828' }]}
+                      onPress={() => handleOrderStatus(o.id, 'مرفوض')}
+                    >
+                      <Text style={styles.btnText}>رفض</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
               ))}
-          </View>
+            </View>
+          )}
+
+          {adminTab === 'meals' && (
+            <View>
+              <Text style={styles.sectionTitle}>إضافة / تعديل الوجبات والأسعار</Text>
+              <View style={styles.formCard}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="اسم الوجبة"
+                  value={newMealName}
+                  onChangeText={setNewMealName}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="السعر بالريال اليمني"
+                  keyboardType="numeric"
+                  value={newMealPrice}
+                  onChangeText={setNewMealPrice}
+                />
+                <View style={styles.categoryPicker}>
+                  {(['وجبة الفطور', 'وجبة الغداء', 'وجبات أخرى'] as Category[]).map((cat) => (
+                    <TouchableOpacity
+                      key={cat}
+                      style={[
+                        styles.catChip,
+                        newMealCategory === cat && styles.activeCatChip,
+                      ]}
+                      onPress={() => setNewMealCategory(cat)}
+                    >
+                      <Text style={styles.chipText}>{cat}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TouchableOpacity style={styles.btnPrimary} onPress={handleSaveMeal}>
+                  <Text style={styles.btnText}>
+                    {editingMealId ? 'تعديل الوجبة' : 'إضافة الوجبة'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.sectionTitle}>قائمة الوجبات والأسعار الحالية</Text>
+              {meals.map((m) => (
+                <View key={m.id} style={styles.cardRow}>
+                  <View>
+                    <Text style={styles.cardTitle}>{m.name}</Text>
+                    <Text style={styles.cardSub}>{m.category}</Text>
+                    <Text style={styles.priceText}>{m.price.toLocaleString()} ريال يمني</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setEditingMealId(m.id);
+                      setNewMealName(m.name);
+                      setNewMealPrice(m.price.toString());
+                      setNewMealCategory(m.category);
+                    }}
+                  >
+                    <Text style={{ color: '#1565c0', fontWeight: 'bold' }}>تعديل</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {adminTab === 'employees' && (
+            <View>
+              <Text style={styles.sectionTitle}>إضافة موظف وتحديد الرصيد المسموح</Text>
+              <View style={styles.formCard}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="اسم الموظف"
+                  value={newEmpName}
+                  onChangeText={setNewEmpName}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="كلمة المرور"
+                  value={newEmpPassword}
+                  onChangeText={setNewEmpPassword}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="الرصيد المسموح (ريال يمني)"
+                  keyboardType="numeric"
+                  value={newEmpBalance}
+                  onChangeText={setNewEmpBalance}
+                />
+                <TouchableOpacity style={styles.btnPrimary} onPress={handleSaveEmployee}>
+                  <Text style={styles.btnText}>إضافة الموظف</Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.sectionTitle}>قائمة الموظفين والأرصدة</Text>
+              {users.map((u) => (
+                <View key={u.id} style={styles.cardRow}>
+                  <View>
+                    <Text style={styles.cardTitle}>{u.name} ({u.role})</Text>
+                    <Text style={styles.cardSub}>
+                      الرصيد المسموح: {u.allowedBalance.toLocaleString()} ر.ي
+                    </Text>
+                    <Text style={styles.cardSub}>
+                      المسحوب: {u.usedBalance.toLocaleString()} ر.ي
+                    </Text>
+                  </View>
+                  {u.role !== 'Admin' && (
+                    <TouchableOpacity onPress={() => handleDeleteUser(u.id)}>
+                      <Text style={{ color: '#c62828', fontWeight: 'bold' }}>حذف</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+            </View>
+          )}
         </ScrollView>
       </SafeAreaView>
     );
   }
 
-  // واجهة الموظفين (بدر، سعيد...)
+  // واجهة الموظف العادي
+  const selectedCategoryMeals = meals.filter((m) => m.category === selectedCategory);
+  const activeMeal = meals.find((m) => m.id === selectedMealId);
   const myOrders = orders.filter((o) => o.employeeName === currentUser.name);
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" />
-      <View style={styles.headerBar}>
-        <Text style={styles.headerTitle}>البوفية - مرحباً {currentUser.name}</Text>
+      {/* شريط التحية العلوي */}
+      <View style={styles.header}>
+        <Text style={styles.headerText}>
+          {getGreeting()} يا {currentUser.name}
+        </Text>
         <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
           <Text style={styles.logoutText}>خروج</Text>
         </TouchableOpacity>
       </View>
 
-      {/* شريط التنقل السفلي/العلوي للموظف */}
-      <View style={styles.navTabs}>
-        <TouchableOpacity
-          style={[styles.tab, employeeTab === 'order' && styles.activeTab]}
-          onPress={() => setEmployeeTab('order')}
-        >
-          <Text style={[styles.tabText, employeeTab === 'order' && styles.activeTabText]}>
-            طلب وجبة
-          </Text>
-        </TouchableOpacity>
+      <ScrollView style={styles.body}>
+        {/* لوحة رصيدي */}
+        <View style={styles.balanceCard}>
+          <Text style={styles.balanceTitle}>لوحة رصيدي</Text>
+          <View style={styles.balanceRow}>
+            <View style={styles.balanceItem}>
+              <Text style={styles.balLabel}>الرصيد المسموح</Text>
+              <Text style={styles.balVal}>{currentUser.allowedBalance.toLocaleString()} ر.ي</Text>
+            </View>
+            <View style={styles.balanceItem}>
+              <Text style={styles.balLabel}>رصيد السحب</Text>
+              <Text style={[styles.balVal, { color: '#c62828' }]}>
+                {currentUser.usedBalance.toLocaleString()} ر.ي
+              </Text>
+            </View>
+            <View style={styles.balanceItem}>
+              <Text style={styles.balLabel}>المتبقي</Text>
+              <Text style={[styles.balVal, { color: '#2e7d32' }]}>
+                {(currentUser.allowedBalance - currentUser.usedBalance).toLocaleString()} ر.ي
+              </Text>
+            </View>
+          </View>
+        </View>
 
-        <TouchableOpacity
-          style={[styles.tab, employeeTab === 'history' && styles.activeTab]}
-          onPress={() => setEmployeeTab('history')}
-        >
-          <Text style={[styles.tabText, employeeTab === 'history' && styles.activeTabText]}>
-            سجل طلباتي
-          </Text>
-        </TouchableOpacity>
-      </View>
+        {/* التنقل بين الشاشات للموظف */}
+        {currentScreen === 'main' && (
+          <View style={styles.iconGrid}>
+            <TouchableOpacity
+              style={styles.mainIconBtn}
+              onPress={() => setCurrentScreen('order_categories')}
+            >
+              <Text style={styles.iconText}>🍔</Text>
+              <Text style={styles.iconBtnLabel}>طلب وجبة</Text>
+            </TouchableOpacity>
 
-      {employeeTab === 'order' ? (
-        <ScrollView style={styles.content}>
-          <Text style={styles.sectionTitle}>اختر الوجبة المناسبة:</Text>
+            <TouchableOpacity
+              style={styles.mainIconBtn}
+              onPress={() => setCurrentScreen('reports')}
+            >
+              <Text style={styles.iconText}>📋</Text>
+              <Text style={styles.iconBtnLabel}>تقارير الوجبات</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
-          {/* قائمة اختيار الوجبات */}
-          <View style={styles.mealsGrid}>
-            {MEAL_OPTIONS.map((meal) => (
+        {/* شاشة الأيقونات الثلاث للوجبات */}
+        {currentScreen === 'order_categories' && (
+          <View>
+            <Text style={styles.sectionTitle}>اختر نوع الوجبة:</Text>
+            {(['وجبة الفطور', 'وجبة الغداء', 'وجبات أخرى'] as Category[]).map((cat) => (
               <TouchableOpacity
-                key={meal.id}
-                style={[
-                  styles.mealCard,
-                  selectedMeal.id === meal.id && styles.selectedMealCard,
-                ]}
-                onPress={() => setSelectedMeal(meal)}
+                key={cat}
+                style={styles.catMenuBtn}
+                onPress={() => {
+                  setSelectedCategory(cat);
+                  setSelectedMealId('');
+                  setCurrentScreen('order_form');
+                }}
               >
-                <Text style={styles.mealName}>{meal.name}</Text>
-                <Text style={styles.mealPrice}>{meal.price} ر.س</Text>
+                <Text style={styles.catMenuText}>{cat}</Text>
               </TouchableOpacity>
             ))}
+            <TouchableOpacity style={styles.btnBack} onPress={() => setCurrentScreen('main')}>
+              <Text style={styles.btnText}>رجوع للرئيسية</Text>
+            </TouchableOpacity>
           </View>
+        )}
 
-          <View style={styles.formGroup}>
-            <Text style={styles.label}>تفاصيل أو ملاحظات إضافية (اختياري):</Text>
+        {/* شاشة اختيارات الوجبة والكمية والسعر */}
+        {currentScreen === 'order_form' && (
+          <View style={styles.formCard}>
+            <Text style={styles.sectionTitle}>{selectedCategory}</Text>
+
+            <Text style={styles.label}>اختر الوجبة:</Text>
+            <ScrollView horizontal style={{ marginBottom: 15 }}>
+              {selectedCategoryMeals.map((meal) => (
+                <TouchableOpacity
+                  key={meal.id}
+                  style={[
+                    styles.catChip,
+                    selectedMealId === meal.id && styles.activeCatChip,
+                  ]}
+                  onPress={() => setSelectedMealId(meal.id)}
+                >
+                  <Text style={styles.chipText}>{meal.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            {activeMeal && (
+              <View style={styles.mealDetailBox}>
+                <Text style={styles.detailText}>
+                  السعر الفردي: {activeMeal.price.toLocaleString()} ريال يمني
+                </Text>
+              </View>
+            )}
+
+            <Text style={styles.label}>الكمية:</Text>
             <TextInput
-              style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
-              placeholder="مثال: بدون شطة / زيادة كاتشب"
-              multiline
-              value={mealDetails}
-              onChangeText={setMealDetails}
+              style={styles.input}
+              keyboardType="numeric"
+              value={quantity}
+              onChangeText={setQuantity}
             />
-          </View>
 
-          <View style={styles.summaryBox}>
-            <Text style={styles.summaryText}>الوصف: {selectedMeal.name}</Text>
-            <Text style={styles.summaryText}>السعر الإجمالي: {selectedMeal.price} ر.س</Text>
-          </View>
+            {activeMeal && (
+              <Text style={styles.totalPriceText}>
+                الإجمالي: {(activeMeal.price * (parseInt(quantity) || 1)).toLocaleString()} ريال يمني
+              </Text>
+            )}
 
-          <TouchableOpacity style={styles.primaryButton} onPress={handleSubmitOrder}>
-            <Text style={styles.primaryButtonText}>إرسال الطلب الآن</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      ) : (
-        <View style={styles.content}>
-          <Text style={styles.sectionTitle}>سجل طلباتك السابقة</Text>
-          {myOrders.length === 0 ? (
-            <Text style={styles.emptyText}>لم تقم بطلب أي وجبة حتى الآن.</Text>
-          ) : (
-            <FlatList
-              data={myOrders}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <View style={styles.orderCardUser}>
-                  <View style={styles.orderHeaderAdmin}>
-                    <Text style={styles.mealName}>{item.mealName}</Text>
-                    <Text style={getStatusStyle(item.status)}>{item.status}</Text>
-                  </View>
-                  <Text style={styles.orderDetails}>التفاصيل: {item.details}</Text>
-                  <Text style={styles.orderTime}>التاريخ والوقت: {item.dateTime}</Text>
-                  <Text style={styles.orderPrice}>السعر: {item.price} ر.س</Text>
+            <TouchableOpacity style={styles.btnPrimary} onPress={handleSendOrder}>
+              <Text style={styles.btnText}>تأكيد وإرسال الطلب</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.btnBack}
+              onPress={() => setCurrentScreen('order_categories')}
+            >
+              <Text style={styles.btnText}>إلغاء ورجوع</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* قسم تقارير الوجبات */}
+        {currentScreen === 'reports' && (
+          <View>
+            <Text style={styles.sectionTitle}>تقارير وجباتك السابقة</Text>
+            {myOrders.length === 0 ? (
+              <Text style={styles.emptyText}>لا توجد طلبات مسجلة.</Text>
+            ) : (
+              myOrders.map((o) => (
+                <View key={o.id} style={styles.card}>
+                  <Text style={styles.cardTitle}>{o.mealName}</Text>
+                  <Text style={styles.cardSub}>
+                    التصنيف: {o.category} | الكمية: {o.quantity}
+                  </Text>
+                  <Text style={styles.priceText}>
+                    المبلغ: {o.totalPrice.toLocaleString()} ريال يمني
+                  </Text>
+                  <Text style={styles.timeText}>{o.dateTime}</Text>
+                  <Text style={styles.statusText}>الحالة: {o.status}</Text>
                 </View>
-              )}
-            />
-          )}
-        </View>
-      )}
+              ))
+            )}
+            <TouchableOpacity style={styles.btnBack} onPress={() => setCurrentScreen('main')}>
+              <Text style={styles.btnText}>رجوع للرئيسية</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
-// دالة مساعدة لتحديد لون حالة الطلب
-const getStatusStyle = (status: OrderStatus) => {
-  switch (status) {
-    case 'مكتمل':
-      return { color: '#2e7d32', fontWeight: 'bold' as const };
-    case 'ملغي':
-      return { color: '#c62828', fontWeight: 'bold' as const };
-    default:
-      return { color: '#ef6c00', fontWeight: 'bold' as const };
-  }
-};
-
-// --- الأنماط والتصميم (Styles) ---
+// --- الأنماط والتصاميم (Styles) ---
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    direction: 'rtl',
-  },
-  appHeaderTitle: {
-    fontSize: 36,
-    fontWeight: 'bold',
-    color: '#d32f2f',
-    textAlign: 'center',
-    marginBottom: 5,
-  },
-  subTitle: {
-    fontSize: 18,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 25,
-  },
-  authContainer: {
-    flex: 1,
+  container: { flex: 1, backgroundColor: '#f8f9fa' },
+  authBox: { flex: 1, justifyContent: 'center', padding: 25 },
+  logoContainer: { alignItems: 'center', marginBottom: 15 },
+  logoCircle: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderWidth: 4,
+    borderColor: '#212529',
     justifyContent: 'center',
-    padding: 20,
-  },
-  headerBar: {
-    backgroundColor: '#d32f2f',
-    padding: 15,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-  },
-  headerTitle: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  logoutBtn: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 5,
-  },
-  logoutText: {
-    color: '#fff',
-    fontWeight: 'bold',
-  },
-  content: {
-    flex: 1,
-    padding: 15,
-  },
-  formGroup: {
-    marginBottom: 15,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 5,
-    textAlign: 'right',
-  },
-  input: {
     backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    textAlign: 'right',
   },
-  primaryButton: {
-    backgroundColor: '#d32f2f',
-    padding: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  primaryButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  hintBox: {
-    marginTop: 30,
-    backgroundColor: '#fff3e0',
-    padding: 15,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ffe0b2',
-  },
-  hintTitle: {
-    fontWeight: 'bold',
-    color: '#e65100',
-    marginBottom: 5,
-    textAlign: 'right',
-  },
-  hintText: {
-    color: '#e65100',
-    textAlign: 'right',
-  },
-  navTabs: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderColor: '#ddd',
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  activeTab: {
-    borderBottomWidth: 3,
+  logoText: { fontSize: 26, fontWeight: 'bold', color: '#212529' },
+  logoSmile: {
+    width: 60,
+    height: 15,
+    borderBottomWidth: 4,
     borderColor: '#d32f2f',
+    borderRadius: 10,
+    marginTop: -5,
   },
-  tabText: {
-    fontSize: 16,
-    color: '#666',
-  },
-  activeTabText: {
-    color: '#d32f2f',
-    fontWeight: 'bold',
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 12,
-    textAlign: 'right',
-  },
-  mealsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: 15,
-  },
-  mealCard: {
-    width: '48%',
-    backgroundColor: '#fff',
-    padding: 15,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    marginBottom: 10,
-    alignItems: 'center',
-  },
-  selectedMealCard: {
-    borderColor: '#d32f2f',
-    borderWidth: 2,
-    backgroundColor: '#ffebee',
-  },
-  mealName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  mealPrice: {
-    fontSize: 14,
-    color: '#2e7d32',
-    marginTop: 5,
-    fontWeight: 'bold',
-  },
-  summaryBox: {
-    backgroundColor: '#e0f2f1',
-    padding: 15,
-    borderRadius: 8,
-    marginBottom: 10,
-  },
-  summaryText: {
-    fontSize: 16,
-    color: '#00695c',
-    fontWeight: 'bold',
-    textAlign: 'right',
-  },
-  orderCardUser: {
-    backgroundColor: '#fff',
-    padding: 15,
-    borderRadius: 8,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#eee',
-  },
-  statsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#e3f2fd',
-    padding: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginHorizontal: 5,
-  },
-  statNumber: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#1565c0',
-  },
-  statLabel: {
-    fontSize: 14,
-    color: '#555',
-    marginTop: 5,
-  },
-  section: {
-    backgroundColor: '#fff',
-    padding: 15,
-    borderRadius: 8,
-    marginBottom: 20,
-  },
-  emptyText: {
-    textAlign: 'center',
-    color: '#999',
-    marginVertical: 15,
-  },
-  orderCardAdmin: {
-    borderWidth: 1,
-    borderColor: '#eee',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 10,
-    backgroundColor: '#fafafa',
-  },
-  orderHeaderAdmin: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 5,
-  },
-  empName: {
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  orderTime: {
-    fontSize: 12,
-    color: '#777',
-  },
-  orderDetails: {
-    fontSize: 14,
-    color: '#444',
-    textAlign: 'right',
-  },
-  orderPrice: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#2e7d32',
-    marginTop: 3,
-    textAlign: 'right',
-  },
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 5,
-  },
-  actionButtonsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginTop: 10,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderColor: '#eee',
-  },
-  smallBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 4,
-  },
-  btnText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  addEmpForm: {
-    marginBottom: 15,
-  },
-  inputSmall: {
-    backgroundColor: '#f9f9f9',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 6,
-    padding: 8,
-    marginBottom: 8,
-    textAlign: 'right',
-  },
-  addEmpBtn: {
-    backgroundColor: '#388e3c',
-    padding: 10,
-    borderRadius: 6,
-    alignItems: 'center',
-  },
-  empRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  empRowText: {
-    fontSize: 15,
-  },
-  editBtn: {
-    marginHorizontal: 10,
-  },
-  deleteBtn: {},
+  appTitle: { fontSize: 24, fontWeight: 'bold', color: '#d32f2f', textAlign: 'center', marginBottom: 25 },
+  inputGroup: { marginBottom: 15 },
+  label: { fontSize: 16, fontWeight: 'bold', color: '#333', marginBottom: 5, textAlign: 'right' },
+  input: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 12, textAlign: 'right' },
+  btnPrimary: { backgroundColor: '#d32f2f', padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 10 },
+  btnBack: { backgroundColor: '#757575', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 10 },
+  btnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  header: { backgroundColor: '#d32f2f', padding: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  headerText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  logoutBtn: { backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 5 },
+  logoutText: { color: '#fff', fontSize: 14 },
+  body: { padding: 15 },
+  balanceCard: { backgroundColor: '#fff', borderRadius: 10, padding: 15, borderWidth: 1, borderColor: '#e0e0e0', marginBottom: 20 },
+  balanceTitle: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 10, textAlign: 'right' },
+  balanceRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  balanceItem: { alignItems: 'center' },
+  balLabel: { fontSize: 12, color: '#666' },
+  balVal: { fontSize: 14, fontWeight: 'bold', color: '#1565c0', marginTop: 3 },
+  iconGrid: { flexDirection: 'row', justifyContent: 'space-around', marginVertical: 20 },
+  mainIconBtn: { backgroundColor: '#fff', padding: 25, borderRadius: 15, alignItems: 'center', width: '45%', borderWidth: 1, borderColor: '#ddd' },
+  iconText: { fontSize: 40 },
+  iconBtnLabel: { fontSize: 16, fontWeight: 'bold', marginTop: 10, color: '#333' },
+  sectionTitle: { fontSize: 18, fontWeight: 'bold', marginVertical: 10, textAlign: 'right', color: '#212529' },
+  catMenuBtn: { backgroundColor: '#fff', padding: 18, borderRadius: 10, borderWidth: 1, borderColor: '#ddd', marginBottom: 10, alignItems: 'center' },
+  catMenuText: { fontSize: 18, fontWeight: 'bold', color: '#333' },
+  formCard: { backgroundColor: '#fff', padding: 15, borderRadius: 10, borderWidth: 1, borderColor: '#ddd' },
+  catChip: { paddingHorizontal: 15, paddingVertical: 8, backgroundColor: '#f0f0f0', borderRadius: 20, marginRight: 8 },
+  activeCatChip: { backgroundColor: '#d32f2f' },
+  chipText: { color: '#333', fontWeight: 'bold' },
+  mealDetailBox: { backgroundColor: '#f5f5f5', padding: 10, borderRadius: 6, marginVertical: 10 },
+  detailText: { textAlign: 'right', color: '#555' },
+  totalPriceText: { fontSize: 16, fontWeight: 'bold', color: '#2e7d32', textAlign: 'right', marginVertical: 10 },
+  tabRow: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderColor: '#ccc' },
+  tabBtn: { flex: 1, paddingVertical: 12, alignItems: 'center' },
+  activeTab: { borderBottomWidth: 3, borderColor: '#d32f2f' },
+  tabBtnText: { fontWeight: 'bold', fontSize: 13, color: '#333' },
+  card: { backgroundColor: '#fff', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#eee', marginBottom: 10 },
+  cardRow: { backgroundColor: '#fff', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#eee', marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  cardTitle: { fontSize: 16, fontWeight: 'bold' },
+  cardSub: { color: '#666', fontSize: 13, marginTop: 2 },
+  priceText: { color: '#2e7d32', fontWeight: 'bold', marginTop: 4 },
+  timeText: { color: '#999', fontSize: 11, marginTop: 2 },
+  statusText: { fontWeight: 'bold', color: '#e65100', marginTop: 4 },
+  actionRow: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 10 },
+  smallBtn: { paddingHorizontal: 15, paddingVertical: 6, borderRadius: 5 },
+  categoryPicker: { flexDirection: 'row', marginVertical: 10 },
+  emptyText: { textAlign: 'center', color: '#999', marginVertical: 20 },
 });
